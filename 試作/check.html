@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>お薬セットチェッカー</title>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <style>
+        body { font-family: sans-serif; text-align: center; transition: 0.3s; margin: 0; padding: 20px; }
+        #preview { width: 100%; max-width: 400px; border: 5px solid #ccc; border-radius: 10px; }
+        .status { font-size: 1.5rem; font-weight: bold; margin-top: 20px; }
+        .log { margin-top: 10px; color: #555; }
+        .ok { background-color: #d4edda; } /* 正解時の背景色（緑） */
+        .ng { background-color: #f8d7da; } /* エラー時の背景色（赤） */
+    </style>
+</head>
+<body>
+
+    <h2>お薬セットチェッカー</h2>
+    <div id="instruction">1. 【ポケット】のQRを映してください</div>
+    
+    <video id="preview" autoplay playsinline></video>
+    <canvas id="canvas" hidden></canvas>
+
+    <div class="status" id="status-display">待機中...</div>
+    <div class="log" id="log-display"></div>
+
+    <script>
+        const video = document.getElementById('preview');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const statusDisplay = document.getElementById('status-display');
+        const logDisplay = document.getElementById('log-display');
+        const instruction = document.getElementById('instruction');
+
+        let pocketID = null; // 最初にスキャンしたIDを保存
+        let isProcessing = false;
+
+        // 音を鳴らす関数（正解・不正解）
+        function playSound(type) {
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            
+            if (type === 'ok') {
+                osc.frequency.setValueAtTime(880, audioCtx.currentTime); // 高い音
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.5);
+            } else {
+                osc.frequency.setValueAtTime(200, audioCtx.currentTime); // 低い音
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 1);
+                osc.start(); osc.stop(audioCtx.currentTime + 1);
+            }
+        }
+
+        // カメラの起動
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }).then(stream => {
+            video.srcObject = stream;
+            requestAnimationFrame(tick);
+        });
+
+        function tick() {
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                canvas.height = video.videoHeight;
+                canvas.width = video.videoWidth;
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const code = jsQR(imageData.data, imageData.width, imageData.height);
+
+                if (code && !isProcessing) {
+                    onCodeDetected(code.data);
+                }
+            }
+            requestAnimationFrame(tick);
+        }
+
+        function onCodeDetected(data) {
+            isProcessing = true; // 連続読み込み防止
+
+            if (!pocketID) {
+                // 1回目の読み取り（ポケット）
+                pocketID = data;
+                document.body.className = '';
+                instruction.innerText = "2. 【お薬の袋】のQRを映してください";
+                statusDisplay.innerText = "ポケット確認：" + data;
+                setTimeout(() => { isProcessing = false; }, 1500); // 1.5秒待機
+            } else {
+                // 2回目の読み取り（お薬）
+                if (pocketID === data) {
+                    document.body.className = 'ok';
+                    statusDisplay.innerText = "一致！ OK";
+                    playSound('ok');
+                } else {
+                    document.body.className = 'ng';
+                    statusDisplay.innerText = "不一致！ エラー";
+                    playSound('ng');
+                }
+                
+                // 3秒後にリセット
+                logDisplay.innerText = `前回の結果: ポケット(${pocketID}) vs お薬(${data})`;
+                setTimeout(() => {
+                    pocketID = null;
+                    document.body.className = '';
+                    instruction.innerText = "1. 【ポケット】のQRを映してください";
+                    statusDisplay.innerText = "待機中...";
+                    isProcessing = false;
+                }, 3000);
+            }
+        }
+    </script>
+</body>
+</html>
