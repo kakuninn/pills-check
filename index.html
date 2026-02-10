@@ -2,113 +2,187 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>お薬セットチェッカー</title>
-    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>お薬カレンダー・マルチチェッカー</title>
     <style>
-        body { font-family: sans-serif; text-align: center; transition: 0.3s; margin: 0; padding: 20px; }
-        #preview { width: 100%; max-width: 400px; border: 5px solid #ccc; border-radius: 10px; }
-        .status { font-size: 1.5rem; font-weight: bold; margin-top: 20px; }
-        .log { margin-top: 10px; color: #555; }
-        .ok { background-color: #d4edda; } /* 正解時の背景色（緑） */
-        .ng { background-color: #f8d7da; } /* エラー時の背景色（赤） */
+        body { font-family: sans-serif; margin: 0; overflow: hidden; background: #000; color: white; }
+        
+        /* 1点目・2点目：巨大な判定表示 */
+        #status-banner {
+            position: absolute; top: 0; width: 100%; padding: 20px 0;
+            text-align: center; font-size: 2.5rem; font-weight: bold;
+            z-index: 100; background: rgba(0,0,0,0.7); transition: 0.3s;
+        }
+        .mode-ok { background: #28a745 !important; color: white; }
+        .mode-ng { background: #dc3545 !important; color: white; }
+        .mode-wait { background: #ffc107 !important; color: black; }
+
+        #container { position: relative; width: 100vw; height: 100vh; }
+        video { width: 100%; height: 100%; object-fit: cover; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+
+        /* 撮影ボタン */
+        #capture-btn {
+            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+            padding: 15px 30px; border-radius: 50px; border: none;
+            background: #fff; color: #000; font-size: 1.2rem; font-weight: bold;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5); z-index: 100;
+        }
     </style>
 </head>
 <body>
 
-    <h2>お薬セットチェッカー</h2>
-    <div id="instruction">1. 【ポケット】のQRを映してください</div>
+    <div id="status-banner">QRコードをかざしてください</div>
     
-    <video id="preview" autoplay playsinline></video>
-    <canvas id="canvas" hidden></canvas>
+    <div id="container">
+        <video id="video" autoplay playsinline></video>
+        <canvas id="canvas"></canvas>
+    </div>
 
-    <div class="status" id="status-display">待機中...</div>
-    <div class="log" id="log-display"></div>
+    <button id="capture-btn">📷 照合結果を撮影</button>
 
     <script>
-        const video = document.getElementById('preview');
+        const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
-        const statusDisplay = document.getElementById('status-display');
-        const logDisplay = document.getElementById('log-display');
-        const instruction = document.getElementById('instruction');
+        const banner = document.getElementById('status-banner');
+        const btn = document.getElementById('capture-btn');
 
-        let pocketID = null; // 最初にスキャンしたIDを保存
-        let isProcessing = false;
+        let detector;
+        let lastCodes = [];
+        let isSuccessActive = false;
 
-        // 音を鳴らす関数（正解・不正解）
+        // 1点目：3パターンの音
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        
         function playSound(type) {
-            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             const osc = audioCtx.createOscillator();
             const gain = audioCtx.createGain();
             osc.connect(gain);
             gain.connect(audioCtx.destination);
-            
-            if (type === 'ok') {
-                osc.frequency.setValueAtTime(880, audioCtx.currentTime); // 高い音
-                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
-                osc.start(); osc.stop(audioCtx.currentTime + 0.5);
-            } else {
-                osc.frequency.setValueAtTime(200, audioCtx.currentTime); // 低い音
-                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 1);
-                osc.start(); osc.stop(audioCtx.currentTime + 1);
+            const now = audioCtx.currentTime;
+
+            if (type === 'scan') { // 読み取り音（短くピコッ）
+                osc.frequency.setValueAtTime(1000, now);
+                gain.gain.setValueAtTime(0.1, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+                osc.start(); osc.stop(now + 0.1);
+            } else if (type === 'match') { // 一致音（タララーン！）
+                [523.25, 659.25, 783.99].forEach((f, i) => {
+                    const o = audioCtx.createOscillator();
+                    o.connect(gain);
+                    o.frequency.setValueAtTime(f, now + i * 0.1);
+                    o.start(now + i * 0.1); o.stop(now + i * 0.1 + 0.2);
+                });
+                gain.gain.setValueAtTime(0.1, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+            } else if (type === 'error') { // 不一致音（ブブー）
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(150, now);
+                gain.gain.setValueAtTime(0.1, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+                osc.start(); osc.stop(now + 0.5);
             }
         }
 
-        // カメラの起動
-        navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }).then(stream => {
+        // カメラ起動
+        async function startCamera() {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: "environment", focusMode: "continuous" } 
+            });
             video.srcObject = stream;
-            requestAnimationFrame(tick);
-        });
-
-        function tick() {
-            if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                canvas.height = video.videoHeight;
-                canvas.width = video.videoWidth;
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                const code = jsQR(imageData.data, imageData.width, imageData.height);
-
-                if (code && !isProcessing) {
-                    onCodeDetected(code.data);
-                }
-            }
-            requestAnimationFrame(tick);
-        }
-
-        function onCodeDetected(data) {
-            isProcessing = true; // 連続読み込み防止
-
-            if (!pocketID) {
-                // 1回目の読み取り（ポケット）
-                pocketID = data;
-                document.body.className = '';
-                instruction.innerText = "2. 【お薬の袋】のQRを映してください";
-                statusDisplay.innerText = "ポケット確認：" + data;
-                setTimeout(() => { isProcessing = false; }, 1500); // 1.5秒待機
+            
+            // 最新のBarcodeDetectorが使えるか確認
+            if ('BarcodeDetector' in window) {
+                detector = new BarcodeDetector({ formats: ['qr_code'] });
+                render();
             } else {
-                // 2回目の読み取り（お薬）
-                if (pocketID === data) {
-                    document.body.className = 'ok';
-                    statusDisplay.innerText = "一致！ OK";
-                    playSound('ok');
-                } else {
-                    document.body.className = 'ng';
-                    statusDisplay.innerText = "不一致！ エラー";
-                    playSound('ng');
-                }
-                
-                // 3秒後にリセット
-                logDisplay.innerText = `前回の結果: ポケット(${pocketID}) vs お薬(${data})`;
-                setTimeout(() => {
-                    pocketID = null;
-                    document.body.className = '';
-                    instruction.innerText = "1. 【ポケット】のQRを映してください";
-                    statusDisplay.innerText = "待機中...";
-                    isProcessing = false;
-                }, 3000);
+                alert("お使いのブラウザはマルチスキャンに対応していません。最新のiOSにアップデートしてください。");
             }
         }
+
+        function render() {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // QRコードの検出
+            detector.detect(video).then(codes => {
+                processCodes(codes);
+            });
+
+            requestAnimationFrame(render);
+        }
+
+        function processCodes(codes) {
+            if (codes.length === 0) return;
+
+            // スキャンしたIDをカウント
+            const counts = {};
+            codes.forEach(c => {
+                counts[c.rawValue] = (counts[c.rawValue] || 0) + 1;
+                // 新しいコードを検知したらスキャン音
+                if (!lastCodes.includes(c.rawValue)) playSound('scan');
+            });
+            lastCodes = codes.map(c => c.rawValue);
+
+            let allMatched = true;
+            let anyError = false;
+
+            codes.forEach(code => {
+                const isPair = counts[code.rawValue] >= 2;
+                
+                // 枠の描画
+                ctx.lineWidth = 10;
+                ctx.strokeStyle = isPair ? '#28a745' : '#ffc107';
+                const { x, y, width, height } = code.boundingBox;
+                ctx.strokeRect(x, y, width, height);
+
+                // IDの表示
+                ctx.fillStyle = isPair ? '#28a745' : '#ffc107';
+                ctx.font = "bold 40px sans-serif";
+                ctx.fillText(code.rawValue, x, y - 10);
+
+                if (!isPair) allMatched = false;
+            });
+
+            // 状態判定と巨大表示（2点目・3点目）
+            if (allMatched && codes.length >= 2) {
+                if (!isSuccessActive) {
+                    banner.innerText = "すべて一致しました！";
+                    banner.className = "mode-ok";
+                    playSound('match');
+                    isSuccessActive = true;
+                    setTimeout(() => { isSuccessActive = false; }, 3000);
+                }
+            } else if (codes.length % 2 !== 0) {
+                banner.innerText = "ペアを探しています...";
+                banner.className = "mode-wait";
+            } else {
+                // ペアにならない組み合わせがある場合
+                banner.innerText = "不一致が含まれています！";
+                banner.className = "mode-ng";
+                // 頻繁に鳴りすぎないよう調整が必要ですが、一旦エラー音
+                // playSound('error'); 
+            }
+        }
+
+        // 撮影機能
+        btn.onclick = () => {
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = canvas.width;
+            tempCanvas.height = canvas.height;
+            const tCtx = tempCanvas.getContext('2d');
+            tCtx.drawImage(video, 0, 0);
+            tCtx.drawImage(canvas, 0, 0);
+            
+            const link = document.createElement('a');
+            link.download = `audit_${new Date().getTime()}.png`;
+            link.href = tempCanvas.toDataURL();
+            link.click();
+        };
+
+        startCamera();
     </script>
 </body>
 </html>
