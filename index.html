@@ -3,23 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>お薬チェッカー 修正版</title>
+    <title>お薬チェッカー 撮影・待機機能付</title>
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
     <style>
         body { font-family: sans-serif; margin: 0; background: #000; color: white; overflow: hidden; }
         
-        /* 巨大判定表示 */
         #banner {
-            position: absolute; top: 0; width: 100%; height: 120px;
+            position: absolute; top: 0; width: 100%; height: 130px;
             display: flex; flex-direction: column; align-items: center; justify-content: center;
             z-index: 100; background: rgba(0,0,0,0.85); transition: 0.3s;
         }
-        #msg { font-size: 1.4rem; font-weight: bold; margin-bottom: 5px; }
-        #target-id { font-size: 2.2rem; color: #ffc107; font-weight: bold; }
+        #msg { font-size: 1.2rem; font-weight: bold; margin-bottom: 5px; text-align: center; }
+        #target-id { font-size: 2rem; color: #ffc107; font-weight: bold; }
 
         .match { background: #28a745 !important; }
         .error { background: #dc3545 !important; }
         .wait  { background: #007bff !important; }
+        .cooldown { background: #6c757d !important; } /* 待機中（グレー） */
 
         #container { position: relative; width: 100vw; height: 100vh; }
         video { width: 100%; height: 100%; object-fit: cover; }
@@ -27,12 +27,14 @@
 
         #controls {
             position: absolute; bottom: 30px; width: 100%;
-            display: flex; justify-content: center; z-index: 110;
+            display: flex; flex-direction: column; align-items: center; gap: 15px; z-index: 110;
         }
         .btn {
-            padding: 15px 40px; border-radius: 30px; border: none;
-            font-weight: bold; font-size: 1.2rem; background: #6c757d; color: white;
+            padding: 15px 30px; border-radius: 30px; border: none;
+            font-weight: bold; font-size: 1.1rem; cursor: pointer; width: 80%; max-width: 300px;
         }
+        #reset-btn { background: #444; color: white; }
+        #capture-btn { background: #fff; color: #000; }
 
         #overlay {
             position: fixed; inset: 0; background: rgba(0,0,0,0.9);
@@ -48,7 +50,7 @@
     </div>
 
     <div id="banner">
-        <div id="msg">1つ目のQR（ポケット）を映して</div>
+        <div id="msg">1つ目（カレンダー）をスキャン</div>
         <div id="target-id">---</div>
     </div>
     
@@ -58,7 +60,8 @@
     </div>
 
     <div id="controls">
-        <button class="btn" onclick="resetCheck()">リセット</button>
+        <button id="capture-btn" class="btn" onclick="takePhoto()">📷 判定結果を保存</button>
+        <button id="reset-btn" class="btn" onclick="resetCheck()">最初からやり直す</button>
     </div>
 
     <script>
@@ -70,7 +73,7 @@
         const targetDisplay = document.getElementById('target-id');
         
         let firstID = null; 
-        let isLocking = false;
+        let isLocked = false;
         let audioCtx;
 
         function playSound(type) {
@@ -112,9 +115,9 @@
 
         function resetCheck() {
             firstID = null;
-            isLocking = false;
+            isLocked = false;
             banner.className = "";
-            msg.innerText = "1つ目のQR（ポケット）を映して";
+            msg.innerText = "1つ目（カレンダー）をスキャン";
             targetDisplay.innerText = "---";
             targetDisplay.style.color = "#ffc107";
         }
@@ -128,7 +131,7 @@
                 const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                 const code = jsQR(imageData.data, imageData.width, imageData.height);
 
-                if (code && !isLocking) {
+                if (code && !isLocked) {
                     processCode(code.data);
                 }
             }
@@ -136,37 +139,71 @@
         }
 
         function processCode(scannedID) {
-            isLocking = true; // 連続読み込みを一時停止
-
             if (firstID === null) {
-                // 1回目の読み取り
+                // 1回目のスキャン
                 firstID = scannedID;
                 playSound('scan');
-                banner.className = "wait";
-                msg.innerText = "【確認中】2つ目を映して";
+                
+                // 【改良】ここで強制的に待機時間を作る
+                isLocked = true; 
+                banner.className = "cooldown";
+                msg.innerText = "読込完了！次のQRへ動かして...";
                 targetDisplay.innerText = scannedID;
-                // 0.8秒後に2回目を受け付ける
-                setTimeout(() => { isLocking = false; }, 800);
+
+                // 1.5秒待ってから、2つ目のスキャンを許可する
+                setTimeout(() => {
+                    isLocked = false;
+                    banner.className = "wait";
+                    msg.innerText = "2つ目（お薬）をスキャンしてください";
+                }, 1500); 
+
             } else {
-                // 2回目の読み取り
+                // 2回目のスキャン
+                isLocked = true; // 判定中は止める
                 if (scannedID === firstID) {
-                    // 一致！
                     playSound('match');
                     banner.className = "match";
                     msg.innerText = "一致しました！";
                     targetDisplay.innerText = "OK: " + scannedID;
-                    targetDisplay.style.color = "#fff";
-                    setTimeout(resetCheck, 2500); // 2.5秒後に次へ
+                    setTimeout(resetCheck, 3000); // 3秒後にリセット
                 } else {
-                    // 不一致！
                     playSound('error');
                     banner.className = "error";
-                    msg.innerText = "不一致！番号が違います";
-                    targetDisplay.innerText = firstID + " ⇔ " + scannedID;
-                    targetDisplay.style.color = "#fff";
-                    setTimeout(() => { isLocking = false; }, 2000); // 2秒後に再試行可能に
+                    msg.innerText = "不一致です！";
+                    targetDisplay.innerText = firstID + " ≠ " + scannedID;
+                    // 不一致の場合はリセットせず、クリアボタンを待つか、2秒後に再試行
+                    setTimeout(() => { isLocked = false; }, 2000);
                 }
             }
+        }
+
+        // 撮影機能の復活
+        function takePhoto() {
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = canvas.width;
+            tempCanvas.height = canvas.height;
+            const tCtx = tempCanvas.getContext('2d');
+            
+            // ビデオ映像を描画
+            tCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
+            
+            // 上部のバナー（判定結果）を合成
+            tCtx.fillStyle = (banner.className === 'match') ? '#28a745' : 
+                             (banner.className === 'error') ? '#dc3545' : 'rgba(0,0,0,0.8)';
+            tCtx.fillRect(0, 0, tempCanvas.width, 130);
+            
+            tCtx.fillStyle = "white";
+            tCtx.font = "bold 40px sans-serif";
+            tCtx.textAlign = "center";
+            tCtx.fillText(msg.innerText, tempCanvas.width / 2, 60);
+            tCtx.font = "bold 50px sans-serif";
+            tCtx.fillText(targetDisplay.innerText, tempCanvas.width / 2, 110);
+
+            // 画像としてダウンロード（iPhoneの場合はブラウザで画像が開くか保存されます）
+            const link = document.createElement('a');
+            link.download = `audit_${new Date().getTime()}.png`;
+            link.href = tempCanvas.toDataURL("image/png");
+            link.click();
         }
     </script>
 </body>
