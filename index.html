@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>お薬チェッカー 撮影・待機機能付</title>
+    <title>お薬チェッカー 最終調整版</title>
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
     <style>
         body { font-family: sans-serif; margin: 0; background: #000; color: white; overflow: hidden; }
@@ -19,7 +19,7 @@
         .match { background: #28a745 !important; }
         .error { background: #dc3545 !important; }
         .wait  { background: #007bff !important; }
-        .cooldown { background: #6c757d !important; } /* 待機中（グレー） */
+        .cooldown { background: #6c757d !important; }
 
         #container { position: relative; width: 100vw; height: 100vh; }
         video { width: 100%; height: 100%; object-fit: cover; }
@@ -122,6 +122,16 @@
             targetDisplay.style.color = "#ffc107";
         }
 
+        // 読み取った箇所に枠を描く関数
+        function drawLine(begin, end, color) {
+            ctx.beginPath();
+            ctx.moveTo(begin.x, begin.y);
+            ctx.lineTo(end.x, end.y);
+            ctx.lineWidth = 8;
+            ctx.strokeStyle = color;
+            ctx.stroke();
+        }
+
         function tick() {
             if (video.readyState === video.HAVE_ENOUGH_DATA) {
                 canvas.width = video.videoWidth;
@@ -131,8 +141,17 @@
                 const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                 const code = jsQR(imageData.data, imageData.width, imageData.height);
 
-                if (code && !isLocked) {
-                    processCode(code.data);
+                if (code) {
+                    // QRコードを見つけたら黄色い枠を描画
+                    drawLine(code.location.topLeftCorner, code.location.topRightCorner, "#FFC107");
+                    drawLine(code.location.topRightCorner, code.location.bottomRightCorner, "#FFC107");
+                    drawLine(code.location.bottomRightCorner, code.location.bottomLeftCorner, "#FFC107");
+                    drawLine(code.location.bottomLeftCorner, code.location.topLeftCorner, "#FFC107");
+
+                    // 待機状態でなければスキャン処理へ
+                    if (!isLocked) {
+                        processCode(code.data);
+                    }
                 }
             }
             requestAnimationFrame(tick);
@@ -140,17 +159,14 @@
 
         function processCode(scannedID) {
             if (firstID === null) {
-                // 1回目のスキャン
                 firstID = scannedID;
                 playSound('scan');
-                
-                // 【改良】ここで強制的に待機時間を作る
                 isLocked = true; 
                 banner.className = "cooldown";
                 msg.innerText = "読込完了！次のQRへ動かして...";
                 targetDisplay.innerText = scannedID;
 
-                // 1.5秒待ってから、2つ目のスキャンを許可する
+                // 1.5秒待機
                 setTimeout(() => {
                     isLocked = false;
                     banner.className = "wait";
@@ -158,40 +174,38 @@
                 }, 1500); 
 
             } else {
-                // 2回目のスキャン
-                isLocked = true; // 判定中は止める
+                isLocked = true; 
                 if (scannedID === firstID) {
                     playSound('match');
                     banner.className = "match";
                     msg.innerText = "一致しました！";
                     targetDisplay.innerText = "OK: " + scannedID;
-                    setTimeout(resetCheck, 3000); // 3秒後にリセット
+                    // 【変更】次へ進む間隔を3秒（3000ms）に変更
+                    setTimeout(resetCheck, 3000); 
                 } else {
                     playSound('error');
                     banner.className = "error";
                     msg.innerText = "不一致です！";
                     targetDisplay.innerText = firstID + " ≠ " + scannedID;
-                    // 不一致の場合はリセットせず、クリアボタンを待つか、2秒後に再試行
                     setTimeout(() => { isLocked = false; }, 2000);
                 }
             }
         }
 
-        // 撮影機能の復活
         function takePhoto() {
             const tempCanvas = document.createElement('canvas');
             tempCanvas.width = canvas.width;
             tempCanvas.height = canvas.height;
             const tCtx = tempCanvas.getContext('2d');
-            
-            // ビデオ映像を描画
             tCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
             
-            // 上部のバナー（判定結果）を合成
+            // 判定中の色付き枠も合成
+            tCtx.drawImage(canvas, 0, 0);
+
+            // 上部の情報を合成
             tCtx.fillStyle = (banner.className === 'match') ? '#28a745' : 
                              (banner.className === 'error') ? '#dc3545' : 'rgba(0,0,0,0.8)';
             tCtx.fillRect(0, 0, tempCanvas.width, 130);
-            
             tCtx.fillStyle = "white";
             tCtx.font = "bold 40px sans-serif";
             tCtx.textAlign = "center";
@@ -199,7 +213,6 @@
             tCtx.font = "bold 50px sans-serif";
             tCtx.fillText(targetDisplay.innerText, tempCanvas.width / 2, 110);
 
-            // 画像としてダウンロード（iPhoneの場合はブラウザで画像が開くか保存されます）
             const link = document.createElement('a');
             link.download = `audit_${new Date().getTime()}.png`;
             link.href = tempCanvas.toDataURL("image/png");
