@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>お薬チェッカー 最終調整版</title>
+    <title>お薬チェッカー 安定化版</title>
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
     <style>
         body { font-family: sans-serif; margin: 0; background: #000; color: white; overflow: hidden; }
@@ -76,6 +76,11 @@
         let isLocked = false;
         let audioCtx;
 
+        // 【追加】表示安定化のための変数
+        let lastValidLocation = null;
+        let lastDetectionTime = 0;
+        const PERSISTENCE_TIME = 300; // 0.3秒間は残像を表示
+
         function playSound(type) {
             if (!audioCtx) return;
             const osc = audioCtx.createOscillator();
@@ -116,13 +121,13 @@
         function resetCheck() {
             firstID = null;
             isLocked = false;
+            lastValidLocation = null; // リセット時に残像もクリア
             banner.className = "";
             msg.innerText = "1つ目（カレンダー）をスキャン";
             targetDisplay.innerText = "---";
             targetDisplay.style.color = "#ffc107";
         }
 
-        // 読み取った箇所に枠を描く関数
         function drawLine(begin, end, color) {
             ctx.beginPath();
             ctx.moveTo(begin.x, begin.y);
@@ -140,18 +145,33 @@
                 
                 const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                 const code = jsQR(imageData.data, imageData.width, imageData.height);
+                const now = Date.now();
+                
+                let locationToDraw = null;
 
                 if (code) {
-                    // QRコードを見つけたら黄色い枠を描画
-                    drawLine(code.location.topLeftCorner, code.location.topRightCorner, "#FFC107");
-                    drawLine(code.location.topRightCorner, code.location.bottomRightCorner, "#FFC107");
-                    drawLine(code.location.bottomRightCorner, code.location.bottomLeftCorner, "#FFC107");
-                    drawLine(code.location.bottomLeftCorner, code.location.topLeftCorner, "#FFC107");
+                    // 認識成功：場所と時間を記録
+                    lastValidLocation = code.location;
+                    lastDetectionTime = now;
+                    locationToDraw = code.location;
 
-                    // 待機状態でなければスキャン処理へ
+                    // 処理
                     if (!isLocked) {
                         processCode(code.data);
                     }
+                } else {
+                    // 認識失敗：直近（0.3秒以内）に認識していたら、その場所を使う（残像表示）
+                    if (lastValidLocation && (now - lastDetectionTime < PERSISTENCE_TIME)) {
+                        locationToDraw = lastValidLocation;
+                    }
+                }
+
+                // 描画すべき場所があれば枠を描く
+                if (locationToDraw) {
+                    drawLine(locationToDraw.topLeftCorner, locationToDraw.topRightCorner, "#FFC107");
+                    drawLine(locationToDraw.topRightCorner, locationToDraw.bottomRightCorner, "#FFC107");
+                    drawLine(locationToDraw.bottomRightCorner, locationToDraw.bottomLeftCorner, "#FFC107");
+                    drawLine(locationToDraw.bottomLeftCorner, locationToDraw.topLeftCorner, "#FFC107");
                 }
             }
             requestAnimationFrame(tick);
@@ -166,7 +186,6 @@
                 msg.innerText = "読込完了！次のQRへ動かして...";
                 targetDisplay.innerText = scannedID;
 
-                // 1.5秒待機
                 setTimeout(() => {
                     isLocked = false;
                     banner.className = "wait";
@@ -180,7 +199,6 @@
                     banner.className = "match";
                     msg.innerText = "一致しました！";
                     targetDisplay.innerText = "OK: " + scannedID;
-                    // 【変更】次へ進む間隔を3秒（3000ms）に変更
                     setTimeout(resetCheck, 3000); 
                 } else {
                     playSound('error');
@@ -198,11 +216,8 @@
             tempCanvas.height = canvas.height;
             const tCtx = tempCanvas.getContext('2d');
             tCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
-            
-            // 判定中の色付き枠も合成
             tCtx.drawImage(canvas, 0, 0);
 
-            // 上部の情報を合成
             tCtx.fillStyle = (banner.className === 'match') ? '#28a745' : 
                              (banner.className === 'error') ? '#dc3545' : 'rgba(0,0,0,0.8)';
             tCtx.fillRect(0, 0, tempCanvas.width, 130);
