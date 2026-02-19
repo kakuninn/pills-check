@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>お薬チェッカー 安定化版</title>
+    <title>お薬チェッカー 高速版</title>
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
     <style>
         body { font-family: sans-serif; margin: 0; background: #000; color: white; overflow: hidden; }
@@ -76,10 +76,9 @@
         let isLocked = false;
         let audioCtx;
 
-        // 【追加】表示安定化のための変数
         let lastValidLocation = null;
         let lastDetectionTime = 0;
-        const PERSISTENCE_TIME = 300; // 0.3秒間は残像を表示
+        const PERSISTENCE_TIME = 300; 
 
         function playSound(type) {
             if (!audioCtx) return;
@@ -121,7 +120,7 @@
         function resetCheck() {
             firstID = null;
             isLocked = false;
-            lastValidLocation = null; // リセット時に残像もクリア
+            lastValidLocation = null;
             banner.className = "";
             msg.innerText = "1つ目（カレンダー）をスキャン";
             targetDisplay.innerText = "---";
@@ -150,23 +149,19 @@
                 let locationToDraw = null;
 
                 if (code) {
-                    // 認識成功：場所と時間を記録
                     lastValidLocation = code.location;
                     lastDetectionTime = now;
                     locationToDraw = code.location;
 
-                    // 処理
                     if (!isLocked) {
                         processCode(code.data);
                     }
                 } else {
-                    // 認識失敗：直近（0.3秒以内）に認識していたら、その場所を使う（残像表示）
                     if (lastValidLocation && (now - lastDetectionTime < PERSISTENCE_TIME)) {
                         locationToDraw = lastValidLocation;
                     }
                 }
 
-                // 描画すべき場所があれば枠を描く
                 if (locationToDraw) {
                     drawLine(locationToDraw.topLeftCorner, locationToDraw.topRightCorner, "#FFC107");
                     drawLine(locationToDraw.topRightCorner, locationToDraw.bottomRightCorner, "#FFC107");
@@ -183,14 +178,15 @@
                 playSound('scan');
                 isLocked = true; 
                 banner.className = "cooldown";
-                msg.innerText = "読込完了！次のQRへ動かして...";
+                msg.innerText = "読込完了！次へ動かして...";
                 targetDisplay.innerText = scannedID;
 
+                // 【場所A】1つ目から2つ目の待機時間 (1000ms = 1秒)
                 setTimeout(() => {
                     isLocked = false;
                     banner.className = "wait";
-                    msg.innerText = "2つ目（お薬）をスキャンしてください";
-                }, 1500); 
+                    msg.innerText = "2つ目（お薬）をスキャン";
+                }, 1000); 
 
             } else {
                 isLocked = true; 
@@ -199,12 +195,17 @@
                     banner.className = "match";
                     msg.innerText = "一致しました！";
                     targetDisplay.innerText = "OK: " + scannedID;
-                    setTimeout(resetCheck, 3000); 
+                    
+                    // 【場所B】一致したあと、次の作業へ戻るまでの時間 (2500ms = 2.5秒)
+                    setTimeout(resetCheck, 2500); 
+
                 } else {
                     playSound('error');
                     banner.className = "error";
                     msg.innerText = "不一致です！";
                     targetDisplay.innerText = firstID + " ≠ " + scannedID;
+                    
+                    // 不一致の場合の再試行までの待ち時間
                     setTimeout(() => { isLocked = false; }, 2000);
                 }
             }
